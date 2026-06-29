@@ -10,7 +10,9 @@ Four tabs, all backed by the same engine:
   * Chat      — pressure-test the plan; the bot can re-run the simulation
 """
 
+import datetime
 import os
+import re
 from dataclasses import replace
 
 import markdown
@@ -30,6 +32,13 @@ from .meeting import prep_meeting
 from .models import ClientProfile, Holding, MeetingContext
 from .portfolio import ASSET_CLASS_LABELS, analyze_portfolio
 from .portfolio_agent import portfolio_commentary
+from .report import build_markdown, build_portfolio_markdown
+
+
+def _dl_name(name, kind):
+    """A tidy download filename like 'dana-whitfield-plan-2026-06-29.md'."""
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "client").lower()).strip("-") or "client"
+    return f"{slug}-{kind}-{datetime.date.today().isoformat()}.md"
 
 app = Flask(__name__)
 
@@ -347,11 +356,26 @@ async function compute(){
 }
 var timer; function schedule(){ clearTimeout(timer); timer=setTimeout(compute,300); }
 
+function downloadFile(filename, content){
+  var blob = new Blob([content], {type:'text/markdown'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a);
+  a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+function addDownload(out, filename, md){
+  var btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'ghost small'; btn.style.marginTop = '14px';
+  btn.textContent = '⬇ Download report (.md)';
+  btn.onclick = function(){ downloadFile(filename || 'report.md', md); };
+  out.appendChild(btn);
+}
 async function aiButton(btnId, outId, url, getBody, label){
-  var b=document.getElementById(btnId); b.disabled=true; var old=b.textContent; b.textContent='Working… (~1 min)';
+  var b=document.getElementById(btnId); b.disabled=true; b.textContent='Working… (~1 min)';
   var out=document.getElementById(outId); out.innerHTML='';
-  try { var r=await fetch(url, getBody()); var d=await r.json();
-        out.innerHTML = d.error ? '<p class="help">'+d.error+'</p>' : d.html;
+  try {
+    var r=await fetch(url, getBody()); var d=await r.json();
+    if (d.error){ out.innerHTML='<p class="help">'+d.error+'</p>'; }
+    else { out.innerHTML = d.html; if (d.md) addDownload(out, d.filename, d.md); }
   } catch(e){ out.innerHTML='<p class="help">Something went wrong.</p>'; }
   b.disabled=false; b.textContent=label;
 }
@@ -521,9 +545,12 @@ def api_compute():
 @app.route("/api/plan", methods=["POST"])
 def api_plan():
     profile = _profile_from_form(request.form)
+    pieces = _all(profile)
     try:
-        text = draft_plan(profile, *_all(profile))
-        return jsonify(html=markdown.markdown(text, extensions=["tables"]))
+        text = draft_plan(profile, *pieces)
+        md = build_markdown(profile, *pieces, plan_text=text)
+        return jsonify(html=markdown.markdown(text, extensions=["tables"]),
+                       md=md, filename=_dl_name(profile.name, "plan"))
     except RuntimeError as exc:
         return jsonify(error=str(escape(str(exc))))
 
@@ -538,9 +565,13 @@ def api_meeting():
         open_items=f.get("open_items") or "",
         notes=f.get("notes_meeting") or "",
     )
+    pieces = _all(profile)
     try:
-        text = prep_meeting(profile, *_all(profile), context=context)
-        return jsonify(html=markdown.markdown(text, extensions=["tables"]))
+        text = prep_meeting(profile, *pieces, context=context)
+        md = build_markdown(profile, *pieces, plan_text=text,
+                            heading="Pre-Meeting Briefing", draft_section="Briefing")
+        return jsonify(html=markdown.markdown(text, extensions=["tables"]),
+                       md=md, filename=_dl_name(profile.name, "meeting"))
     except RuntimeError as exc:
         return jsonify(error=str(escape(str(exc))))
 
@@ -582,9 +613,12 @@ def api_portfolio_analyze():
     if not holdings:
         return jsonify(error="Add at least one holding first.")
     risk = data.get("risk", "moderate")
+    analysis = analyze_portfolio(holdings, risk)
     try:
-        text = portfolio_commentary(holdings, analyze_portfolio(holdings, risk), risk)
-        return jsonify(html=markdown.markdown(text, extensions=["tables"]))
+        text = portfolio_commentary(holdings, analysis, risk)
+        md = build_portfolio_markdown(holdings, analysis, risk, text)
+        return jsonify(html=markdown.markdown(text, extensions=["tables"]),
+                       md=md, filename=f"portfolio-{risk}-{datetime.date.today().isoformat()}.md")
     except RuntimeError as exc:
         return jsonify(error=str(escape(str(exc))))
 
