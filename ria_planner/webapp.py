@@ -23,6 +23,7 @@ from .agent import MODEL, draft_plan
 from .docqa import answer_question
 from .engine import (
     claiming_comparison,
+    longevity_stress,
     monte_carlo,
     run_plan,
     scenarios,
@@ -205,6 +206,8 @@ CLIENT_FORM = (
     + _field("Annual household income ($)", "annual_income", 110000, "Household income before tax.")
     + _field("Current retirement savings ($)", "current_savings", 65000, "Invested for retirement so far.")
     + _field("Monthly contribution ($)", "monthly_contribution", 1500, "What you add each month.")
+    + _slider("Contribution growth (raises)", "contribution_growth_pct", 0, 6, 0.5, 2, "cg_v",
+              "How fast your saving rises each year — raises, escalation. Real plans aren't flat.", 1)
     + '</div></div>'
     '<div class="card"><div class="section-title">Guaranteed income (today\'s $/yr)</div><div class="grid">'
     + _field("Social Security, combined", "social_security_annual", 30000, "Age-67 estimate from ssa.gov.")
@@ -217,6 +220,10 @@ CLIENT_FORM = (
     + _slider("Investment fees", "annual_fee_pct", 0, 2, 0.1, 1, "fee_v", "Advisory + fund fees, taken from returns.", 1)
     + _slider("Inflation", "inflation_pct", 0, 5, 0.25, 2.5, "inf_v", "How fast prices rise each year.", 2)
     + _slider("Withdrawal rate", "withdrawal_pct", 3, 6, 0.25, 4, "wd_v", "Share of the nest egg spent per year.", 2)
+    + _slider("Retirement spending decline", "retirement_spending_decline_pct", 0, 3, 0.25, 1, "sd_v",
+              "Real spending tends to drift down in active retirement (the 'go-go → slow-go' years).", 2)
+    + _slider("Retirement tax rate", "retirement_tax_pct", 0, 35, 1, 12, "tax_v",
+              "Approx. tax on withdrawals from tax-deferred accounts. A simplification — not full tax modeling.", 0)
     + '</div></div>'
     '<div class="card"><div class="section-title">Big late-life costs</div><div class="grid">'
     + _field("Long-term care ($/yr)", "ltc_annual_cost", 60000, "Care cost in the final years. 0 to ignore.")
@@ -240,6 +247,7 @@ PLAN_RESULTS = """
 <div class="card"><div class="section-title">What-if scenarios</div><table class="data" id="scen"></table></div>
 <div class="card"><div class="section-title">Strategy comparison</div><table class="data" id="strat"></table></div>
 <div class="card"><div class="section-title">Social Security timing</div><table class="data" id="claim"></table></div>
+<div class="card"><div class="section-title">Longevity stress — what if you live longer?</div><table class="data" id="longev"></table></div>
 <div class="card">
   <button type="button" class="wide" id="planbtn" onclick="writePlan()">Write the full advisor plan (AI · ~1 min)</button>
   <div id="plan" class="doc"></div>
@@ -349,6 +357,7 @@ function render(d){
   document.getElementById('scen').innerHTML = thead(['What-if lever','Success']) + d.scenarios.map(function(s){return row([s.label,pctv(s.prob)]);}).join('');
   document.getElementById('strat').innerHTML = thead(['Strategy','Success']) + d.strategy.map(function(s){return row([s.label,pctv(s.prob)]);}).join('');
   document.getElementById('claim').innerHTML = thead(['Claim age','Benefit','Success']) + d.claiming.map(function(c){return row(['Claim at '+c.claim_age, m(c.benefit)+'/yr', pctv(c.prob)]);}).join('');
+  if (d.longevity) document.getElementById('longev').innerHTML = thead(['If you live to','Success']) + d.longevity.map(function(x){return row(['age '+x.age, pctv(x.prob)]);}).join('');
 }
 async function compute(){
   var res=await fetch('/api/compute',{method:'POST',body:new FormData(document.getElementById('f'))});
@@ -517,11 +526,14 @@ def _profile_from_form(f) -> ClientProfile:
         ltc_annual_cost=_num(f, "ltc_annual_cost", 0),
         ltc_years=int(_num(f, "ltc_years", 3)),
         pre_medicare_annual_cost=_num(f, "pre_medicare_annual_cost", 0),
+        contribution_growth=_num(f, "contribution_growth_pct", 2) / 100,
         expected_return=_num(f, "expected_return_pct", 6) / 100,
         annual_fee=_num(f, "annual_fee_pct", 1) / 100,
         inflation=_num(f, "inflation_pct", 2.5) / 100,
         income_replacement_ratio=_num(f, "income_replacement_pct", 75) / 100,
         withdrawal_rate=_num(f, "withdrawal_pct", 4) / 100,
+        retirement_spending_decline=_num(f, "retirement_spending_decline_pct", 1) / 100,
+        retirement_tax_rate=_num(f, "retirement_tax_pct", 12) / 100,
         risk_tolerance=f.get("risk_tolerance", "aggressive"),
     )
 
@@ -561,6 +573,7 @@ def api_compute():
         strategy=[{"label": s.label, "prob": s.probability_of_success} for s in strategy_comparison(profile)],
         claiming=[{"claim_age": c.claim_age, "benefit": c.annual_benefit, "prob": c.probability_of_success}
                   for c in claiming_comparison(profile)],
+        longevity=[{"age": x.age, "prob": x.probability_of_success} for x in longevity_stress(profile)],
     )
 
 
@@ -682,6 +695,8 @@ RECOMPUTE_TOOL = {
             "social_security_annual": {"type": "number"},
             "income_replacement_pct": {"type": "number", "description": "e.g. 70 for 70%"},
             "expected_return_pct": {"type": "number", "description": "e.g. 6 for 6%"},
+            "contribution_growth_pct": {"type": "number", "description": "annual raise to savings, e.g. 3 for 3%"},
+            "retirement_tax_pct": {"type": "number", "description": "tax on withdrawals, e.g. 15 for 15%"},
             "risk_tolerance": {"type": "string", "enum": ["conservative", "moderate", "aggressive"]},
         },
     },
@@ -699,6 +714,10 @@ def _apply_overrides(profile, ov):
         kw["income_replacement_ratio"] = float(ov["income_replacement_pct"]) / 100
     if "expected_return_pct" in ov:
         kw["expected_return"] = float(ov["expected_return_pct"]) / 100
+    if "contribution_growth_pct" in ov:
+        kw["contribution_growth"] = float(ov["contribution_growth_pct"]) / 100
+    if "retirement_tax_pct" in ov:
+        kw["retirement_tax_rate"] = float(ov["retirement_tax_pct"]) / 100
     if "risk_tolerance" in ov:
         kw["risk_tolerance"] = ov["risk_tolerance"]
     return replace(profile, **kw)

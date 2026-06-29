@@ -52,13 +52,15 @@ investment fees (returns are net of fees), the household's combined assets and \
 income, the dynamic-withdrawal and glide-path methods, Social Security timing \
 (including the bridge years before benefits begin), long-term care costs, and \
 pre-Medicare healthcare costs — so don't describe these as absent from the \
-model. But several are modeled in a SIMPLIFIED way, and a good advisor draft is \
-transparent about that rather than presenting the output as settled. In \
-section 4, briefly name the simplifications that materially affect the result, \
-including at least: taxes are approximated by a flat pre-tax replacement ratio \
-(it does not separately model Social Security taxation, account-location, RMDs, \
-or state tax); the glide path is modeled as a single balanced mix held through \
-retirement; and returns use fixed long-run assumptions. Frame the figures as a \
+model. The model also now captures contribution growth, a retirement spending decline \
+(the "smile"), lognormal returns, and an explicit retirement tax rate — don't \
+call those missing either. But several things are still modeled SIMPLY, and a \
+good advisor draft is transparent about that rather than presenting the output \
+as settled. In section 4, briefly name the simplifications that materially \
+affect the result, including at least: taxes use one flat rate on portfolio \
+withdrawals (no account-location, RMDs, Social Security taxation, or brackets); \
+returns use fixed long-run mean/volatility (no regime shifts or fat tails); and \
+the spending decline is a simple yearly taper. Frame the figures as a \
 reasonable model to pressure-test with the client, not as precise predictions. \
 Treat "validate assumptions with the client" as normal professional diligence.
 
@@ -96,7 +98,8 @@ CLIENT PROFILE (all dollar figures are HOUSEHOLD totals, both spouses)
 ({results.years_to_retirement} years away), planning to age {profile.life_expectancy}
   Annual household income: ${profile.annual_income:,.0f}
   Current retirement savings (combined): ${profile.current_savings:,.0f}
-  Monthly contribution (combined): ${profile.monthly_contribution:,.0f}
+  Monthly contribution (combined): ${profile.monthly_contribution:,.0f}, \
+growing {profile.contribution_growth:.1%}/yr
   Risk tolerance: {profile.risk_tolerance}
   Advisor notes: {profile.notes or "(none)"}
 
@@ -117,9 +120,13 @@ PLANNING ASSUMPTIONS
   Investment fees: {profile.annual_fee:.1%}  ->  net return used: \
 {results.net_return:.1%}
   Inflation: {profile.inflation:.1%}
-  Income replacement target: {profile.income_replacement_ratio:.0%} of gross \
-income (pre-tax — taxes implicitly covered)
+  Income replacement target: {profile.income_replacement_ratio:.0%} of income \
+(the spending lifestyle)
+  Retirement spending decline: {profile.retirement_spending_decline:.1%}/yr real \
+(the "smile" — active years taper, healthcare/LTC added at the end)
+  Retirement tax rate on portfolio withdrawals: {profile.retirement_tax_rate:.0%}
   Withdrawal rate: {profile.withdrawal_rate:.1%}
+  Returns are modeled lognormally (random each year), not a fixed rate.
 
 COMPUTED PROJECTIONS (already calculated — do not recompute)
   Projected nest egg at retirement: ${results.projected_nest_egg:,.0f}
