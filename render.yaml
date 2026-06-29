@@ -6,7 +6,10 @@ services:
     runtime: python
     plan: free
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn ria_planner.webapp:app --bind 0.0.0.0:$PORT"
+    # --timeout 180: AI calls take up to ~1-2 min; the default 30s kills them.
+    # --threads 4: let the one worker handle live slider requests while an AI
+    #              call is in flight, instead of blocking the whole site.
+    startCommand: "gunicorn ria_planner.webapp:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 180"
     envVars:
       - key: ANTHROPIC_API_KEY   # you'll paste your key in the Render dashboard
         sync: false
