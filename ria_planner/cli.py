@@ -13,8 +13,9 @@
 
     # prep for a client meeting (cheat-sheet instead of a full plan)
     python -m ria_planner.cli --client clients/dana.json --meeting
-    python -m ria_planner.cli --client clients/dana.json --meeting \
-        --purpose "Annual review" --since "June 2025" --save
+
+    # analyze a portfolio (allocation drift + rebalancing)
+    python -m ria_planner.cli --portfolio clients/holdings.csv --risk moderate
 """
 
 import argparse
@@ -32,11 +33,14 @@ from .engine import (
 from .intake import (
     load_client_json,
     load_clients_csv,
+    load_holdings_csv,
     load_meeting_context_json,
 )
 from .meeting import prep_meeting
 from .models import ClientProfile, MeetingContext
-from .report import build_markdown, save_report
+from .portfolio import ASSET_CLASS_LABELS, analyze_portfolio
+from .portfolio_agent import portfolio_commentary
+from .report import build_markdown, build_portfolio_markdown, save_report, save_text
 
 DISCLAIMER = (
     "ILLUSTRATIVE ONLY. Projections use simplified assumptions and are a draft "
@@ -152,6 +156,61 @@ def print_claiming(claiming_list: list) -> None:
     print("=" * 64)
 
 
+def print_portfolio(analysis, risk: str) -> None:
+    print("=" * 64)
+    print(f"  PORTFOLIO ANALYSIS — {risk} model — {_money(analysis.total_value)}")
+    print("=" * 64)
+    print(f"  {'Asset class':<22}{'now':>6}{'target':>8}{'drift':>8}{'rebalance':>14}")
+    print("-" * 64)
+    for c in analysis.classes:
+        trade = analysis.rebalancing[c]
+        action = f"buy {_money(trade)}" if trade >= 0 else f"sell {_money(-trade)}"
+        label = ASSET_CLASS_LABELS.get(c, c)
+        print(
+            f"  {label:<22}{analysis.current_pct[c]:>5.0f}%{analysis.target_pct[c]:>7.0f}%"
+            f"{analysis.drift[c]:>+7.0f}{action:>14}"
+        )
+    print("-" * 64)
+    if analysis.flags:
+        print("  Flags:")
+        for f in analysis.flags:
+            print(f"    - {f}")
+    else:
+        print("  No flags — allocation is close to target.")
+    print("=" * 64)
+
+
+def run_portfolio(args) -> None:
+    """Portfolio-analysis flow: load holdings, analyze, print, draft, save."""
+    try:
+        holdings = load_holdings_csv(args.portfolio)
+    except (OSError, ValueError) as exc:
+        print(f"Could not load holdings: {exc}")
+        return
+
+    analysis = analyze_portfolio(holdings, args.risk)
+    print_portfolio(analysis, args.risk)
+
+    narrative = None
+    if args.no_ai:
+        print("\n[--no-ai] Skipping AI commentary.")
+    else:
+        print("\nWriting portfolio analysis with Claude...\n")
+        try:
+            narrative = portfolio_commentary(holdings, analysis, args.risk)
+            print(narrative)
+        except RuntimeError as exc:
+            print(f"Could not generate AI commentary: {exc}")
+            print("Tip: run with --no-ai to see the numbers without a key.")
+
+    if args.save:
+        markdown = build_portfolio_markdown(holdings, analysis, args.risk, narrative)
+        path = save_text(markdown, f"portfolio-{args.risk}", args.out, suffix="")
+        print(f"\nSaved report -> {path}")
+
+    print(f"\n{DISCLAIMER}")
+
+
 def _load_profiles(args) -> list:
     """Decide which client(s) to run, from a file or the built-in sample."""
     if args.client:
@@ -244,11 +303,27 @@ def main() -> None:
     parser.add_argument("--open-items", help="Outstanding action items from last time.")
     parser.add_argument("--notes", help="Any notes for this specific meeting.")
     parser.add_argument(
+        "--portfolio",
+        metavar="PATH",
+        help="Analyze a portfolio's holdings from a CSV (name,value,asset_class).",
+    )
+    parser.add_argument(
+        "--risk",
+        default="moderate",
+        choices=["conservative", "moderate", "aggressive"],
+        help="Target risk model for portfolio analysis (default: moderate).",
+    )
+    parser.add_argument(
         "--no-ai",
         action="store_true",
         help="Skip the Claude output; show the math only (no API key needed).",
     )
     args = parser.parse_args()
+
+    # Portfolio analysis is its own job — handle it and return.
+    if args.portfolio:
+        run_portfolio(args)
+        return
 
     try:
         profiles = _load_profiles(args)

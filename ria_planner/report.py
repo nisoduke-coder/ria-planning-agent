@@ -103,6 +103,51 @@ def build_markdown(
     return "\n".join(parts)
 
 
+def build_portfolio_markdown(holdings, analysis, risk, narrative=None):
+    """Assemble a portfolio analysis report as one Markdown string."""
+    from .portfolio import ASSET_CLASS_LABELS
+
+    today = datetime.date.today().isoformat()
+    parts = [
+        f"# Portfolio Analysis — {risk} model",
+        f"_Prepared {today} · {_money(analysis.total_value)} across "
+        f"{len(holdings)} holdings · DRAFT for advisor review_",
+        "",
+        "## Allocation vs. target",
+        "",
+        "| Asset class | Current | Target | Drift | Rebalance |",
+        "|---|---|---|---|---|",
+    ]
+    for c in analysis.classes:
+        trade = analysis.rebalancing[c]
+        action = f"buy {_money(trade)}" if trade >= 0 else f"sell {_money(-trade)}"
+        parts.append(
+            f"| {ASSET_CLASS_LABELS.get(c, c)} | {analysis.current_pct[c]:.0f}% | "
+            f"{analysis.target_pct[c]:.0f}% | {analysis.drift[c]:+.0f} pts | {action} |"
+        )
+    parts += ["", "## Flags", ""]
+    parts += [f"- {f}" for f in analysis.flags] or ["- None"]
+    parts += ["", "## Holdings", "", "| Holding | Value | Class |", "|---|---|---|"]
+    for h in holdings:
+        parts.append(
+            f"| {h.name} | {_money(h.value)} | {ASSET_CLASS_LABELS.get(h.asset_class, h.asset_class)} |"
+        )
+    if narrative:
+        parts += ["", "## Advisor analysis", "", narrative.strip()]
+    parts += ["", "---", "", DISCLAIMER, ""]
+    return "\n".join(parts)
+
+
+def save_text(markdown: str, name: str, outdir: str = "output", suffix: str = "") -> str:
+    """Write any Markdown string to outdir under a slugified name; return the path."""
+    os.makedirs(outdir, exist_ok=True)
+    today = datetime.date.today().isoformat()
+    path = os.path.join(outdir, f"{_slug(name)}{suffix}-{today}.md")
+    with open(path, "w") as f:
+        f.write(markdown)
+    return path
+
+
 def save_report(
     markdown: str, profile: ClientProfile, outdir: str = "output", suffix: str = ""
 ) -> str:

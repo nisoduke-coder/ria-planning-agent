@@ -77,6 +77,20 @@ Meeting context comes from an optional `"meeting"` block in the client JSON
 (see `clients/dana.json`) and can be overridden with `--purpose`, `--since`,
 `--open-items`, and `--notes`.
 
+## Portfolio analysis (job #1)
+
+Load a portfolio's holdings, compare the allocation to a target model, and get
+rebalancing trades + an AI-written analysis.
+
+```bash
+python -m ria_planner.cli --portfolio clients/holdings.csv --risk moderate
+python -m ria_planner.cli --portfolio clients/holdings.csv --risk aggressive --save
+```
+
+The holdings file is a CSV with `name,value,asset_class` columns (see
+`clients/holdings.csv`). Asset classes: `equity`, `fixed_income`, `cash`,
+`real_estate`. Target allocations live in `portfolio.TARGET_ALLOCATIONS`.
+
 ## File map
 
 | File | What it does |
@@ -85,6 +99,8 @@ Meeting context comes from an optional `"meeting"` block in the client JSON
 | `ria_planner/engine.py` | Retirement projection math |
 | `ria_planner/agent.py`  | Claude drafts the plan from the math |
 | `ria_planner/webapp.py` | Browser form — fill in boxes, get a plan (no terminal) |
+| `ria_planner/portfolio.py` | Portfolio math: allocation, drift, rebalancing (job #1) |
+| `ria_planner/portfolio_agent.py` | Claude writes the portfolio analysis (job #1) |
 | `ria_planner/meeting.py`| Claude writes a pre-meeting cheat-sheet (job #3) |
 | `ria_planner/intake.py` | Loads clients from JSON / CSV files |
 | `ria_planner/report.py` | Exports the plan/brief to a Markdown deliverable |

@@ -11,7 +11,7 @@ extra notes in your spreadsheet without breaking anything.
 import csv
 import json
 
-from .models import ClientProfile, MeetingContext
+from .models import ClientProfile, Holding, MeetingContext
 
 # Fields that must be whole numbers / plain text (everything else is a float).
 _INT_FIELDS = {"current_age", "retirement_age", "life_expectancy", "ltc_years"}
@@ -59,6 +59,31 @@ def load_clients_csv(path: str) -> list:
     """Read many clients from a CSV file (one row each, header on line 1)."""
     with open(path, newline="") as f:
         return [_to_profile(row) for row in csv.DictReader(f)]
+
+
+def load_holdings_csv(path: str) -> list:
+    """Read a portfolio's holdings from a CSV (columns: name, value, asset_class)."""
+    holdings = []
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            name = (row.get("name") or "").strip()
+            asset_class = (
+                (row.get("asset_class") or "other").strip().lower().replace(" ", "_")
+            )
+            raw_value = row.get("value") or ""
+            if not name or raw_value == "":
+                continue
+            try:
+                value = float(raw_value)
+            except ValueError:
+                raise ValueError(
+                    f"Holding '{name}' has a non-numeric value: {raw_value!r} "
+                    f"(use plain numbers, no $ or commas)."
+                )
+            holdings.append(Holding(name=name, value=value, asset_class=asset_class))
+    if not holdings:
+        raise ValueError("No holdings found — the file needs name,value,asset_class rows.")
+    return holdings
 
 
 def load_meeting_context_json(path: str) -> MeetingContext:

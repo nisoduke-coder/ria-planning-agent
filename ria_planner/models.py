@@ -71,3 +71,12 @@ class MeetingContext:
     last_review: str = ""               # when you last met, e.g. "June 2025"
     open_items: str = ""                # outstanding action items from last time
     notes: str = ""                     # anything else relevant to this meeting
+
+
+@dataclass
+class Holding:
+    """One position in a client's portfolio."""
+
+    name: str                    # e.g. "S&P 500 Index Fund"
+    value: float                 # current dollar value
+    asset_class: str = "other"   # equity | fixed_income | cash | real_estate | other
