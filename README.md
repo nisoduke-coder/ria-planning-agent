@@ -92,11 +92,12 @@ Meeting context comes from an optional `"meeting"` block in the client JSON
 
 ## Monte Carlo
 
-Alongside the straight-line projection, the engine runs 10,000 randomized
-"possible futures" (`engine.monte_carlo`) and reports a **probability of
-success** plus the range of outcomes. Random year-to-year returns reveal
-*volatility drag* the single-number estimate hides — which is why this number
-is usually lower (and more honest) than the straight-line projection suggests.
+Alongside the straight-line projection, the engine runs 5,000 randomized
+"possible futures" (`engine.monte_carlo`, vectorized with NumPy) and reports a
+**probability of success** plus the range of outcomes. Random year-to-year
+returns reveal *volatility drag* the single-number estimate hides — which is why
+this number is usually lower (and more honest) than the straight-line projection
+suggests.
 
 ## What the engine accounts for
 

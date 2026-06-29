@@ -8,15 +8,12 @@ the narrative high quality.
 
 import os
 
-import anthropic
-from dotenv import load_dotenv
-
 from .engine import MonteCarloResults, PlanResults, Scenario
 from .models import ClientProfile
 
-# Read key/values from a local .env file into the environment, so you only
-# have to paste your API key once instead of exporting it every session.
-load_dotenv()
+# Note: `anthropic` and `python-dotenv` are imported lazily inside draft_plan()
+# (not at module top) so the math-only path — e.g. `cli --no-ai` — runs with no
+# AI dependencies installed at all.
 
 MODEL = "claude-opus-4-8"
 
@@ -50,14 +47,20 @@ withdrawals in down markets), and Social Security claiming age. When you \
 recommend flexible spending, note honestly that its higher success rate comes \
 partly from spending less in bad years.
 
-The brief already accounts for guaranteed income (Social Security, pensions, \
-other), investment fees (returns are net of fees), the household's combined \
-assets and income, the dynamic-withdrawal and glide-path methods, Social \
-Security timing, long-term care costs, and pre-Medicare healthcare costs. The \
-replacement target is pre-tax, so income taxes are implicitly covered. Do not \
-flag any of these as missing — they are handled. Only flag genuinely absent \
-items, and treat "validate assumptions with the client" as normal professional \
-diligence, not a defect in the data.
+The brief accounts for guaranteed income (Social Security, pensions, other), \
+investment fees (returns are net of fees), the household's combined assets and \
+income, the dynamic-withdrawal and glide-path methods, Social Security timing \
+(including the bridge years before benefits begin), long-term care costs, and \
+pre-Medicare healthcare costs — so don't describe these as absent from the \
+model. But several are modeled in a SIMPLIFIED way, and a good advisor draft is \
+transparent about that rather than presenting the output as settled. In \
+section 4, briefly name the simplifications that materially affect the result, \
+including at least: taxes are approximated by a flat pre-tax replacement ratio \
+(it does not separately model Social Security taxation, account-location, RMDs, \
+or state tax); the glide path is modeled as a single balanced mix held through \
+retirement; and returns use fixed long-run assumptions. Frame the figures as a \
+reasonable model to pressure-test with the client, not as precise predictions. \
+Treat "validate assumptions with the client" as normal professional diligence.
 
 Compliance note: include a short reminder that this is a draft for advisor \
 review and not final investment advice."""
@@ -161,6 +164,10 @@ def draft_plan(
     claiming_list: list,
 ) -> str:
     """Call Claude to write the plan. Requires ANTHROPIC_API_KEY in the env."""
+    import anthropic            # imported here so the math path needs no AI deps
+    from dotenv import load_dotenv
+
+    load_dotenv()              # pick up ANTHROPIC_API_KEY from a local .env file
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError(
             "ANTHROPIC_API_KEY is not set. Open .env and paste your key, "

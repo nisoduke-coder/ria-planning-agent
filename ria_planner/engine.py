@@ -29,15 +29,20 @@ VOLATILITY_BY_RISK = {
 }
 DEFAULT_VOLATILITY = 0.11
 
-# Where a glide path lands the portfolio by retirement (a conservative mix),
-# and how many years before retirement the de-risking takes place over.
-CONSERVATIVE_RETURN = 0.045   # gross, before fees
-CONSERVATIVE_VOLATILITY = 0.07
+# Where a glide path lands the portfolio by retirement, and over how many years
+# before retirement the de-risking happens. The target is a BALANCED mix that is
+# then held through retirement — NOT frozen at maximally-conservative for life
+# (which would needlessly forfeit decades of growth).
+GLIDE_TARGET_RETURN = 0.055   # gross, before fees (a balanced ~50/50 mix)
+GLIDE_TARGET_VOLATILITY = 0.10
 GLIDE_YEARS = 10
 
-# Guardrail (dynamic withdrawal) settings: never pull more than 5% of the
-# current portfolio in a year, and never cut essential spending below 75% of
-# the planned need.
+# Guardrail (dynamic withdrawal) settings. In a normal year we draw what's
+# needed; in a down market we trim the withdrawal toward 5% of the current
+# portfolio (GUARDRAIL_CEILING) to avoid over-drawing — but never below 75% of
+# the essential need (SPENDING_FLOOR_RATIO). The essential-spending floor takes
+# precedence over the 5% ceiling, so a withdrawal CAN exceed 5% when protecting
+# essentials.
 GUARDRAIL_CEILING = 0.05
 SPENDING_FLOOR_RATIO = 0.75
 
@@ -167,8 +172,9 @@ def _year_params(profile: ClientProfile, years_until_retirement: int, glide_path
     """The (net mean return, volatility) to use for one simulated year.
 
     Without a glide path, the allocation stays put. With one, it drifts from the
-    client's current mix toward a conservative mix over the final GLIDE_YEARS
-    before retirement, then stays conservative through retirement.
+    client's current mix toward a BALANCED mix over the final GLIDE_YEARS before
+    retirement, then holds that balanced mix through retirement (a realistic
+    glide, not a freeze at maximally-conservative for decades).
     """
     start_return = profile.expected_return
     start_vol = VOLATILITY_BY_RISK.get(profile.risk_tolerance, DEFAULT_VOLATILITY)
@@ -179,11 +185,11 @@ def _year_params(profile: ClientProfile, years_until_retirement: int, glide_path
     if years_until_retirement >= GLIDE_YEARS:
         gross, vol = start_return, start_vol
     elif years_until_retirement <= 0:
-        gross, vol = CONSERVATIVE_RETURN, CONSERVATIVE_VOLATILITY
+        gross, vol = GLIDE_TARGET_RETURN, GLIDE_TARGET_VOLATILITY
     else:
         t = (GLIDE_YEARS - years_until_retirement) / GLIDE_YEARS  # 0 -> 1
-        gross = start_return + (CONSERVATIVE_RETURN - start_return) * t
-        vol = start_vol + (CONSERVATIVE_VOLATILITY - start_vol) * t
+        gross = start_return + (GLIDE_TARGET_RETURN - start_return) * t
+        vol = start_vol + (GLIDE_TARGET_VOLATILITY - start_vol) * t
     return gross - profile.annual_fee, vol
 
 
@@ -194,6 +200,7 @@ def monte_carlo(
     glide_path: bool = False,
     withdrawal_strategy: str = "fixed",
     ss_multiplier: float = 1.0,
+    ss_claim_age: int = None,
 ) -> MonteCarloResults:
     """Simulate many full lifetimes at once; report how often the money lasts.
 
@@ -203,6 +210,12 @@ def monte_carlo(
     and advance them one year at a time together — the same math, but ~50-100x
     faster, which matters on a small cloud server. `seed` is fixed so results
     are reproducible and comparable across the what-if levers.
+
+    `ss_claim_age` models WHEN Social Security starts: in any retirement year
+    before that age, Social Security pays nothing and the portfolio must cover
+    the whole need (the "bridge"). That's what makes delaying a real tradeoff —
+    a bigger benefit later, paid for by draining the portfolio in between. If
+    None, Social Security flows from the retirement date.
     """
     rng = np.random.default_rng(seed)
     n = n_simulations
@@ -218,22 +231,27 @@ def monte_carlo(
         portfolio = portfolio * (1 + rng.normal(mean, vol, n)) + annual_contribution
     retirement_balance = portfolio.copy()
 
-    guaranteed_today = (
-        profile.social_security_annual * ss_multiplier
-        + profile.pension_annual
-        + profile.other_retirement_income_annual
+    ss_today = profile.social_security_annual * ss_multiplier
+    other_guaranteed_today = (
+        profile.pension_annual + profile.other_retirement_income_annual
     )
 
     # --- Decumulation: every path spends down through retirement ---
     alive = np.ones(n, dtype=bool)  # paths that haven't run out yet
     for y in range(years_dec):
         inflate = (1 + infl) ** (years_acc + y)
+        age = profile.retirement_age + y
 
         base_need = profile.annual_income * profile.income_replacement_ratio
-        if profile.retirement_age + y < 65:
+        if age < 65:
             base_need += profile.pre_medicare_annual_cost   # bridge to Medicare
         if profile.ltc_annual_cost > 0 and y >= years_dec - profile.ltc_years:
             base_need += profile.ltc_annual_cost            # late-life care
+
+        # Social Security only pays once you've claimed; before then it's $0 and
+        # the portfolio carries the whole need (the bridge cost of delaying).
+        ss_now = ss_today if (ss_claim_age is None or age >= ss_claim_age) else 0.0
+        guaranteed_today = ss_now + other_guaranteed_today
         need = max(base_need * inflate - guaranteed_today * inflate, 0.0)
 
         if withdrawal_strategy == "dynamic":
@@ -324,12 +342,16 @@ def strategy_comparison(profile: ClientProfile) -> list:
 def claiming_comparison(profile: ClientProfile) -> list:
     """Social Security timing: the effect of claiming at 62 vs 67 vs 70.
 
-    Simplification: assumes benefits begin at retirement at the age-adjusted
-    amount (bridge years between retirement and a later claim are not modeled).
+    Each option models both the benefit size (a later claim pays more) AND when
+    income starts: if you claim after you retire, the portfolio covers the whole
+    need during the bridge years before benefits begin. That tradeoff is the
+    whole point — delaying is not free.
     """
     options = []
     for claim_age, factor in sorted(SS_CLAIM_FACTORS.items()):
-        prob = monte_carlo(profile, ss_multiplier=factor).probability_of_success
+        prob = monte_carlo(
+            profile, ss_multiplier=factor, ss_claim_age=claim_age
+        ).probability_of_success
         options.append(
             ClaimingOption(
                 claim_age=claim_age,

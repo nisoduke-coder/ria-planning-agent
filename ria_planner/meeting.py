@@ -8,11 +8,12 @@ talking points, decisions to tee up, and questions to ask.
 
 import os
 
-import anthropic
-
 from .agent import MODEL, _build_brief
 from .engine import MonteCarloResults, PlanResults
 from .models import ClientProfile, MeetingContext
+
+# `anthropic` is imported lazily inside prep_meeting() so importing this module
+# (e.g. via the CLI) doesn't require the AI dependencies for the math-only path.
 
 MEETING_SYSTEM_PROMPT = """\
 You are a financial planning assistant preparing a Registered Investment \
@@ -51,6 +52,10 @@ def prep_meeting(
     context: MeetingContext,
 ) -> str:
     """Call Claude to write the pre-meeting brief. Requires ANTHROPIC_API_KEY."""
+    import anthropic
+    from dotenv import load_dotenv
+
+    load_dotenv()
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError(
             "ANTHROPIC_API_KEY is not set. Open .env and paste your key, "
