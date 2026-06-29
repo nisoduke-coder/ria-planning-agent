@@ -20,14 +20,24 @@ Two deliberate layers:
   advisor-facing plan (summary, on-track verdict, recommendations, risks, next
   steps). It explains; it does not calculate.
 
-## Easiest way: the web form (no terminal)
+## Easiest way: the web app (no terminal)
 
 ```bash
 .venv/bin/python -m ria_planner.webapp
 ```
 
-Then open **http://127.0.0.1:5050**, fill in the boxes, and click Build plan.
-Runs entirely on your machine.
+Then open **http://127.0.0.1:5050**. The whole product is in the browser, in
+four tabs:
+
+- **Retirement plan** — assumptions are sliders; the success probability and
+  figures update live as you change them. A button writes the full AI plan.
+- **Meeting prep** — a pre-meeting cheat-sheet from the same client inputs.
+- **Portfolio** — an editable holdings table with live allocation/drift, plus
+  an AI rebalancing analysis.
+- **Pressure-test** — a chat that knows the current plan and can *re-run the
+  simulation* to answer what-ifs ("what if I retire 3 years later?").
+
+Runs entirely on your machine. Deployed copies use `gunicorn` (see `render.yaml`).
 
 ## Run it (command line)
 
@@ -114,6 +124,15 @@ Alongside the straight-line projection, the engine runs 5,000 randomized
 returns reveal *volatility drag* the single-number estimate hides — which is why
 this number is usually lower (and more honest) than the straight-line projection
 suggests.
+
+## Tests
+
+```bash
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q
+```
+
+Tests cover the deterministic math (engine + portfolio) — no API key needed.
 
 ## What the engine accounts for
 
