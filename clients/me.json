@@ -1,0 +1,22 @@
+{
+  "name": "Niso",
+  "current_age": 32,
+  "retirement_age": 65,
+  "life_expectancy": 92,
+  "annual_income": 110000,
+  "current_savings": 65000,
+  "monthly_contribution": 1500,
+  "social_security_annual": 30000,
+  "pension_annual": 0,
+  "other_retirement_income_annual": 0,
+  "ltc_annual_cost": 60000,
+  "ltc_years": 3,
+  "pre_medicare_annual_cost": 0,
+  "expected_return": 0.06,
+  "annual_fee": 0.005,
+  "inflation": 0.025,
+  "income_replacement_ratio": 0.75,
+  "withdrawal_rate": 0.04,
+  "risk_tolerance": "aggressive",
+  "notes": "Pretend self-advisory example. EDIT THESE NUMBERS to match your real situation."
+}

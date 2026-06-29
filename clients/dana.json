@@ -1,0 +1,28 @@
+{
+  "name": "Dana Whitfield",
+  "current_age": 48,
+  "retirement_age": 67,
+  "life_expectancy": 92,
+  "annual_income": 160000,
+  "current_savings": 720000,
+  "monthly_contribution": 3500,
+  "social_security_annual": 48000,
+  "pension_annual": 0,
+  "other_retirement_income_annual": 0,
+  "ltc_annual_cost": 70000,
+  "ltc_years": 3,
+  "pre_medicare_annual_cost": 0,
+  "expected_return": 0.065,
+  "annual_fee": 0.01,
+  "inflation": 0.025,
+  "income_replacement_ratio": 0.70,
+  "withdrawal_rate": 0.04,
+  "risk_tolerance": "aggressive",
+  "notes": "Married, dual income, kids' college already funded. Strong saver.",
+  "meeting": {
+    "purpose": "Annual review",
+    "last_review": "June 2025",
+    "open_items": "Confirm updated Social Security estimate; revisit aggressive allocation as she nears 60",
+    "notes": "Dana mentioned she may want to retire a year or two earlier."
+  }
+}

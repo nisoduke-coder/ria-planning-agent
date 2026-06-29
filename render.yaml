@@ -1,0 +1,14 @@
+# Render deployment blueprint. On Render: New + -> Blueprint -> pick this repo.
+# It reads this file, builds the app, and prompts you for the secret env vars.
+services:
+  - type: web
+    name: ria-planning-agent
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn ria_planner.webapp:app --bind 0.0.0.0:$PORT"
+    envVars:
+      - key: ANTHROPIC_API_KEY   # you'll paste your key in the Render dashboard
+        sync: false
+      - key: APP_PASSWORD        # set this later to password-protect the site
+        sync: false

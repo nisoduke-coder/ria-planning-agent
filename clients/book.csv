@@ -1,0 +1,4 @@
+name,current_age,retirement_age,annual_income,current_savings,monthly_contribution,social_security_annual,pre_medicare_annual_cost,ltc_annual_cost,expected_return,income_replacement_ratio,risk_tolerance,notes
+Dana Whitfield,48,67,160000,720000,3500,48000,0,70000,0.065,0.70,aggressive,Dual income; strong saver
+Marcus Lee,58,62,120000,310000,1200,30000,18000,60000,0.05,0.75,moderate,Retiring early at 62; needs pre-Medicare coverage
+Priya Anand,35,67,95000,80000,900,28000,0,55000,0.07,0.80,aggressive,Young; long runway; just starting to save
