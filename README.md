@@ -36,8 +36,12 @@ four tabs:
   an AI rebalancing analysis.
 - **Pressure-test** — a chat that knows the current plan and can *re-run the
   simulation* to answer what-ifs ("what if I retire 3 years later?").
+- **Documents** — paste a statement's text or upload a PDF and ask questions;
+  Claude answers using only the document.
 
-Runs entirely on your machine. Deployed copies use `gunicorn` (see `render.yaml`).
+That's all four advisor jobs — plan drafting, meeting prep, portfolio analysis,
+and document Q&A — in one app. Runs entirely on your machine; deployed copies
+use `gunicorn` (see `render.yaml`).
 
 ## Run it (command line)
 
