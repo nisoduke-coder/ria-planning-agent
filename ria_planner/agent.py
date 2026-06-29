@@ -78,6 +78,17 @@ def _build_brief(
 ) -> str:
     """Format the profile + computed results into a clean brief for Claude."""
     status = "ON TRACK" if results.on_track else "SHORTFALL"
+    if profile.retirement_expenses:
+        items = "; ".join(f"{k} ${v:,.0f}" for k, v in profile.retirement_expenses.items())
+        spending_line = (
+            f"Retirement spending: client's itemized budget "
+            f"${sum(profile.retirement_expenses.values()):,.0f}/yr ({items})"
+        )
+    else:
+        spending_line = (
+            f"Income replacement target: {profile.income_replacement_ratio:.0%} of income "
+            f"(top-down estimate; the client did not itemize a budget)"
+        )
     scenario_lines = "\n".join(
         f"    {s.label}: {s.probability_of_success:.0%}"
         for s in scenario_list
@@ -120,8 +131,7 @@ PLANNING ASSUMPTIONS
   Investment fees: {profile.annual_fee:.1%}  ->  net return used: \
 {results.net_return:.1%}
   Inflation: {profile.inflation:.1%}
-  Income replacement target: {profile.income_replacement_ratio:.0%} of income \
-(the spending lifestyle)
+  {spending_line}
   Retirement spending decline: {profile.retirement_spending_decline:.1%}/yr real \
 (the "smile" — active years taper, healthcare/LTC added at the end)
   Retirement tax rate on portfolio withdrawals: {profile.retirement_tax_rate:.0%}

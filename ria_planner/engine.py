@@ -97,6 +97,17 @@ class PlanResults:
     sustainable_total_income: float
 
 
+def retirement_spending_today(profile: ClientProfile) -> float:
+    """Base annual retirement spending in today's dollars.
+
+    If the client itemized a bottom-up budget, use its total; otherwise fall
+    back to the top-down "% of current income" estimate.
+    """
+    if profile.retirement_expenses:
+        return float(sum(profile.retirement_expenses.values()))
+    return profile.annual_income * profile.income_replacement_ratio
+
+
 def _growing_annuity_factor(years, r, g):
     """Future value of $1/yr that grows at rate g, invested at return r."""
     if years == 0:
@@ -135,7 +146,7 @@ def run_plan(profile: ClientProfile) -> PlanResults:
     years = profile.years_to_retirement
     inflate = (1 + profile.inflation) ** years
 
-    gross_income_need = profile.annual_income * profile.income_replacement_ratio * inflate
+    gross_income_need = retirement_spending_today(profile) * inflate
     guaranteed_today = (
         profile.social_security_annual
         + profile.pension_annual
@@ -264,6 +275,7 @@ def monte_carlo(
     # --- Decumulation: every path spends down through retirement ---
     alive = np.ones(n, dtype=bool)  # paths that haven't run out yet
     tax = profile.retirement_tax_rate
+    spending_base = retirement_spending_today(profile)
     for y in range(years_dec):
         inflate = (1 + infl) ** (years_acc + y)
         age = profile.retirement_age + y
@@ -271,7 +283,7 @@ def monte_carlo(
         # Lifestyle spending follows the "smile" — it drifts down through the
         # active years (floored), while healthcare/LTC is added on top.
         decline = max((1 - profile.retirement_spending_decline) ** y, SPENDING_DECLINE_FLOOR)
-        base_need = profile.annual_income * profile.income_replacement_ratio * decline
+        base_need = spending_base * decline
         if age < 65:
             base_need += profile.pre_medicare_annual_cost   # bridge to Medicare
         if profile.ltc_annual_cost > 0 and y >= years_dec - profile.ltc_years:

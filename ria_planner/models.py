@@ -5,7 +5,7 @@ something an advisor would collect during intake. Defaults reflect common
 planning assumptions so you can leave most of them alone while testing.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -42,6 +42,9 @@ class ClientProfile:
     annual_fee: float = 0.01           # advisory + fund fees (1%); reduces net return
     inflation: float = 0.025           # annual inflation (2.5%)
     income_replacement_ratio: float = 0.75  # % of income needed in retirement (spending)
+    # Bottom-up retirement budget: {category: annual $ in today's dollars}. If
+    # non-empty, its total is used as the spending need INSTEAD of the % above.
+    retirement_expenses: dict = field(default_factory=dict)
     withdrawal_rate: float = 0.04      # sustainable withdrawal rate (the "4% rule")
     retirement_spending_decline: float = 0.01  # real spending drifts down per year (the "smile")
     retirement_tax_rate: float = 0.0   # taxes on portfolio withdrawals (0 = pre-tax target)

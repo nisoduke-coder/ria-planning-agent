@@ -11,6 +11,7 @@ Four tabs, all backed by the same engine:
 """
 
 import datetime
+import json
 import os
 import re
 from dataclasses import replace
@@ -25,6 +26,7 @@ from .engine import (
     claiming_comparison,
     longevity_stress,
     monte_carlo,
+    retirement_spending_today,
     run_plan,
     scenarios,
     strategy_comparison,
@@ -142,6 +144,11 @@ CSS = """
 
   .hold-row { display: grid; grid-template-columns: 2fr 1fr 1.3fr auto; gap: 8px; margin-bottom: 8px; align-items: center; }
   .hold-row button { background: #fdeceb; color: #b3322d; box-shadow: none; padding: 8px 12px; }
+  .budget-row { display: grid; grid-template-columns: 1fr 150px; gap: 10px; align-items: center; margin-bottom: 6px; }
+  .budget-row span { font-size: .88rem; color: #34435f; }
+  .budget-row span small { color: var(--muted); }
+  .toggle { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: .85rem; margin-bottom: 12px; }
+  .toggle input { width: auto; }
 
   .chatlog { display: flex; flex-direction: column; gap: 10px; max-height: 460px; overflow-y: auto; padding: 4px; margin-bottom: 12px; }
   .bubble { max-width: 88%; padding: 10px 14px; border-radius: 14px; font-size: .92rem; }
@@ -191,6 +198,29 @@ def _slider(label, name, lo, hi, step, value, span_id, help_text, decimals=0):
     )
 
 
+BUDGET_DEFAULTS = [
+    ("Housing", 1800), ("Food & groceries", 700), ("Healthcare", 600),
+    ("Transportation", 400), ("Travel & leisure", 600), ("Insurance", 250),
+    ("Other / discretionary", 500),
+]
+
+
+def _budget_card():
+    rows = "".join(
+        f'<div class="budget-row"><span>{cat} <small>$/mo</small></span>'
+        f'<input type="number" data-cat="{cat}" value="{amt}" oninput="syncBudget(); schedule()"></div>'
+        for cat, amt in BUDGET_DEFAULTS
+    )
+    return (
+        '<div class="card"><div class="section-title">Retirement spending</div>'
+        '<label class="toggle"><input type="checkbox" id="use_budget" oninput="syncBudget(); schedule()">'
+        ' Build a detailed monthly budget instead of the % below</label>'
+        '<div id="budget">' + rows + '</div>'
+        '<input type="hidden" name="retirement_expenses_json" id="rej">'
+        '<div id="budget_total" class="help" style="margin-top:10px"></div></div>'
+    )
+
+
 CLIENT_FORM = (
     '<div class="card"><div class="section-title">About you</div><div class="grid">'
     '<div class="field"><label>Name</label><input name="name" value="Me" oninput="schedule()"></div>'
@@ -214,7 +244,8 @@ CLIENT_FORM = (
     + _field("Pension", "pension_annual", 0)
     + _field("Other (rental, part-time)", "other_retirement_income_annual", 0)
     + '</div></div>'
-    '<div class="card"><div class="section-title">The assumptions (change any)</div><div class="grid">'
+    + _budget_card()
+    + '<div class="card"><div class="section-title">The assumptions (change any)</div><div class="grid">'
     + _slider("Income needed in retirement", "income_replacement_pct", 40, 100, 5, 75, "repl_v", "% of today's income. Most need 70–80%.")
     + _slider("Expected return", "expected_return_pct", 3, 10, 0.5, 6, "ret_v", "Average yearly growth before fees.", 1)
     + _slider("Investment fees", "annual_fee_pct", 0, 2, 0.1, 1, "fee_v", "Advisory + fund fees, taken from returns.", 1)
@@ -359,7 +390,19 @@ function render(d){
   document.getElementById('claim').innerHTML = thead(['Claim age','Benefit','Success']) + d.claiming.map(function(c){return row(['Claim at '+c.claim_age, m(c.benefit)+'/yr', pctv(c.prob)]);}).join('');
   if (d.longevity) document.getElementById('longev').innerHTML = thead(['If you live to','Success']) + d.longevity.map(function(x){return row(['age '+x.age, pctv(x.prob)]);}).join('');
 }
+function syncBudget(){
+  var box=document.getElementById('use_budget'); var use=box&&box.checked;
+  var obj={}, total=0;
+  document.querySelectorAll('#budget input[data-cat]').forEach(function(inp){
+    var v=parseFloat(inp.value)||0; obj[inp.dataset.cat]=v*12; total+=v*12; });
+  document.getElementById('rej').value = use ? JSON.stringify(obj) : '';
+  var bt=document.getElementById('budget_total');
+  if(bt) bt.textContent = use
+    ? 'Total budget: $'+Math.round(total).toLocaleString()+'/yr — this overrides the % replacement below.'
+    : 'Currently using the % of income below. Check the box to itemize a budget instead.';
+}
 async function compute(){
+  syncBudget();
   var res=await fetch('/api/compute',{method:'POST',body:new FormData(document.getElementById('f'))});
   render(await res.json());
 }
@@ -511,8 +554,20 @@ def _num(form, key, default):
         return default
 
 
+def _budget_from_form(f) -> dict:
+    """Parse the itemized retirement budget (JSON in a hidden field), if used."""
+    raw = f.get("retirement_expenses_json") or ""
+    if not raw:
+        return {}
+    try:
+        return {str(k): float(v) for k, v in json.loads(raw).items() if float(v) > 0}
+    except (ValueError, TypeError):
+        return {}
+
+
 def _profile_from_form(f) -> ClientProfile:
     return ClientProfile(
+        retirement_expenses=_budget_from_form(f),
         name=f.get("name") or "Me",
         current_age=int(_num(f, "current_age", 32)),
         retirement_age=int(_num(f, "retirement_age", 65)),
@@ -553,12 +608,16 @@ def api_compute():
     profile = _profile_from_form(request.form)
     r = run_plan(profile)
     mc = monte_carlo(profile)
-    income_today = profile.annual_income * profile.income_replacement_ratio
+    spending = retirement_spending_today(profile)
+    if profile.retirement_expenses:
+        source = f"You itemized ${spending:,.0f}/yr of retirement spending"
+    else:
+        source = (f"We assume you'll want {profile.income_replacement_ratio:.0%} of your "
+                  f"${profile.annual_income:,.0f} income = ${spending:,.0f}/yr")
     explain = (
-        f"We assume you'll want {profile.income_replacement_ratio:.0%} of your "
-        f"${profile.annual_income:,.0f} income = ${income_today:,.0f}/yr in today's dollars. "
-        f"Inflation grows that to ${r.gross_income_need:,.0f}/yr by retirement. Guaranteed "
-        f"income covers ${r.guaranteed_income:,.0f}, so your portfolio must supply "
+        f"{source} in today's dollars. Inflation grows that to "
+        f"${r.gross_income_need:,.0f}/yr by retirement. Guaranteed income covers "
+        f"${r.guaranteed_income:,.0f}, so your portfolio must supply "
         f"${r.portfolio_income_need:,.0f}/yr — which at a {profile.withdrawal_rate:.1%} "
         f"withdrawal rate needs a ${r.target_nest_egg:,.0f} nest egg."
     )
