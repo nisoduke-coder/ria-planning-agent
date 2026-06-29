@@ -576,6 +576,8 @@ def api_plan():
                        filename=_dl_name(profile.name, "plan"))
     except RuntimeError as exc:
         return jsonify(error=str(escape(str(exc))))
+    except Exception:
+        return jsonify(error="The AI request failed (a temporary hiccup or rate limit). Please try again.")
 
 
 @app.route("/api/meeting", methods=["POST"])
@@ -598,6 +600,8 @@ def api_meeting():
                        filename=_dl_name(profile.name, "meeting"))
     except RuntimeError as exc:
         return jsonify(error=str(escape(str(exc))))
+    except Exception:
+        return jsonify(error="The AI request failed (a temporary hiccup or rate limit). Please try again.")
 
 
 def _holdings_from_json(data):
@@ -646,6 +650,8 @@ def api_portfolio_analyze():
                        filename=f"portfolio-{risk}-{datetime.date.today().isoformat()}.md")
     except RuntimeError as exc:
         return jsonify(error=str(escape(str(exc))))
+    except Exception:
+        return jsonify(error="The AI request failed (a temporary hiccup or rate limit). Please try again.")
 
 
 # --------------------------------------------------------------------------- #
@@ -727,31 +733,36 @@ def api_chat():
     client = anthropic.Anthropic()
     messages = [{"role": h["role"], "content": h["content"]} for h in history if h.get("content")]
 
-    for _ in range(4):
-        resp = client.messages.create(
-            model=MODEL, max_tokens=1200, system=CHAT_SYSTEM + context,
-            tools=[RECOMPUTE_TOOL], messages=messages,
+    try:
+        for _ in range(4):
+            resp = client.messages.create(
+                model=MODEL, max_tokens=1200, system=CHAT_SYSTEM + context,
+                tools=[RECOMPUTE_TOOL], messages=messages,
+            )
+            if resp.stop_reason == "tool_use":
+                messages.append({"role": "assistant", "content": resp.content})
+                results = []
+                for block in resp.content:
+                    if block.type == "tool_use":
+                        np_ = _apply_overrides(profile, block.input)
+                        nr = run_plan(np_)
+                        nmc = monte_carlo(np_)
+                        out = (
+                            f"probability money lasts: {nmc.probability_of_success:.0%}; "
+                            f"projected nest egg ${nr.projected_nest_egg:,.0f}; target ${nr.target_nest_egg:,.0f}; "
+                            f"{'on track' if nr.on_track else 'shortfall of $' + format(-nr.surplus_or_gap, ',.0f')}"
+                        )
+                        results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
+                messages.append({"role": "user", "content": results})
+                continue
+            text = "".join(b.text for b in resp.content if b.type == "text")
+            return jsonify(html=markdown.markdown(text, extensions=["tables"]), text=text)
+        return jsonify(html="<p>I couldn't settle after several steps — try rephrasing.</p>", text="")
+    except Exception:
+        return jsonify(
+            error="The chat hit a temporary error (a rate limit, overload, or timeout). Please try again.",
+            text="",
         )
-        if resp.stop_reason == "tool_use":
-            messages.append({"role": "assistant", "content": resp.content})
-            results = []
-            for block in resp.content:
-                if block.type == "tool_use":
-                    np_ = _apply_overrides(profile, block.input)
-                    nr = run_plan(np_)
-                    nmc = monte_carlo(np_)
-                    out = (
-                        f"probability money lasts: {nmc.probability_of_success:.0%}; "
-                        f"projected nest egg ${nr.projected_nest_egg:,.0f}; target ${nr.target_nest_egg:,.0f}; "
-                        f"{'on track' if nr.on_track else 'shortfall of $' + format(-nr.surplus_or_gap, ',.0f')}"
-                    )
-                    results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
-            messages.append({"role": "user", "content": results})
-            continue
-        text = "".join(b.text for b in resp.content if b.type == "text")
-        return jsonify(html=markdown.markdown(text, extensions=["tables"]), text=text)
-
-    return jsonify(html="<p>I couldn't settle after several steps — try rephrasing.</p>", text="")
 
 
 @app.route("/api/docqa", methods=["POST"])
@@ -766,6 +777,8 @@ def api_docqa():
         return jsonify(html=markdown.markdown(text, extensions=["tables"]))
     except (ValueError, RuntimeError) as exc:
         return jsonify(error=str(escape(str(exc))))
+    except Exception:
+        return jsonify(error="The request failed (a temporary hiccup or rate limit). Please try again.")
 
 
 # Allow larger request bodies for PDF uploads (~32 MB).
