@@ -13,8 +13,9 @@ risk (a bad market right before/after retirement) that a single number hides.
 Everything is illustrative, not advice. See the disclaimer in cli.py.
 """
 
-import random
 from dataclasses import dataclass, replace
+
+import numpy as np
 
 from .models import ClientProfile
 
@@ -186,61 +187,6 @@ def _year_params(profile: ClientProfile, years_until_retirement: int, glide_path
     return gross - profile.annual_fee, vol
 
 
-def _simulate_path(profile, rng, glide_path, withdrawal_strategy, ss_multiplier):
-    """One simulated lifetime. Returns (nest egg at retirement, survived?)."""
-    infl = profile.inflation
-    years_acc = profile.years_to_retirement
-    years_dec = profile.years_in_retirement
-    annual_contribution = profile.monthly_contribution * 12
-
-    # --- Accumulation: save and grow until retirement ---
-    portfolio = profile.current_savings
-    for y in range(years_acc):
-        mean, vol = _year_params(profile, years_acc - y, glide_path)
-        portfolio = portfolio * (1 + rng.normalvariate(mean, vol)) + annual_contribution
-    retirement_balance = portfolio
-
-    # Guaranteed income in today's dollars (Social Security scaled by claim age).
-    guaranteed_today = (
-        profile.social_security_annual * ss_multiplier
-        + profile.pension_annual
-        + profile.other_retirement_income_annual
-    )
-
-    # --- Decumulation: spend down through retirement ---
-    survived = True
-    for y in range(years_dec):
-        inflate = (1 + infl) ** (years_acc + y)
-
-        # Base lifestyle plus major cost provisions (all in today's dollars).
-        base_need = profile.annual_income * profile.income_replacement_ratio
-        if profile.retirement_age + y < 65:
-            base_need += profile.pre_medicare_annual_cost   # bridge to Medicare
-        if profile.ltc_annual_cost > 0 and y >= years_dec - profile.ltc_years:
-            base_need += profile.ltc_annual_cost            # late-life care
-
-        gross_need = base_need * inflate
-        guaranteed = guaranteed_today * inflate
-        need = max(gross_need - guaranteed, 0.0)
-
-        if withdrawal_strategy == "dynamic" and portfolio > 0:
-            # Guardrails: in down markets, draw less (but never below essentials).
-            ceiling = portfolio * GUARDRAIL_CEILING
-            withdrawal = need if need <= ceiling else max(ceiling, need * SPENDING_FLOOR_RATIO)
-        else:
-            withdrawal = need
-
-        portfolio -= withdrawal
-        if portfolio <= 0:
-            survived = False
-            break
-
-        mean, vol = _year_params(profile, -y, glide_path)
-        portfolio = portfolio * (1 + rng.normalvariate(mean, vol))
-
-    return retirement_balance, survived
-
-
 def monte_carlo(
     profile: ClientProfile,
     n_simulations: int = 5_000,
@@ -249,39 +195,74 @@ def monte_carlo(
     withdrawal_strategy: str = "fixed",
     ss_multiplier: float = 1.0,
 ) -> MonteCarloResults:
-    """Simulate many full lifetimes; report how often the money lasts.
+    """Simulate many full lifetimes at once; report how often the money lasts.
 
     Each path saves to retirement, then spends down to life expectancy with
-    random yearly returns. `seed` is fixed for reproducibility, and reused
-    across comparisons so differences reflect the lever, not random noise.
+    random yearly returns. This is vectorized with NumPy: instead of looping
+    over each of the thousands of simulations, we hold all of them in arrays
+    and advance them one year at a time together — the same math, but ~50-100x
+    faster, which matters on a small cloud server. `seed` is fixed so results
+    are reproducible and comparable across the what-if levers.
     """
-    rng = random.Random(seed)
-    balances = []
-    survivors = 0
-    for _ in range(n_simulations):
-        balance, survived = _simulate_path(
-            profile, rng, glide_path, withdrawal_strategy, ss_multiplier
-        )
-        balances.append(balance)
-        if survived:
-            survivors += 1
+    rng = np.random.default_rng(seed)
+    n = n_simulations
+    infl = profile.inflation
+    years_acc = profile.years_to_retirement
+    years_dec = profile.years_in_retirement
+    annual_contribution = profile.monthly_contribution * 12
 
-    balances.sort()
-    return MonteCarloResults(
-        probability_of_success=survivors / n_simulations,
-        n_simulations=n_simulations,
-        p10=_percentile(balances, 10),
-        p50=_percentile(balances, 50),
-        p90=_percentile(balances, 90),
-        volatility=VOLATILITY_BY_RISK.get(profile.risk_tolerance, DEFAULT_VOLATILITY),
+    # --- Accumulation: every path saves and grows until retirement ---
+    portfolio = np.full(n, float(profile.current_savings))
+    for y in range(years_acc):
+        mean, vol = _year_params(profile, years_acc - y, glide_path)
+        portfolio = portfolio * (1 + rng.normal(mean, vol, n)) + annual_contribution
+    retirement_balance = portfolio.copy()
+
+    guaranteed_today = (
+        profile.social_security_annual * ss_multiplier
+        + profile.pension_annual
+        + profile.other_retirement_income_annual
     )
 
+    # --- Decumulation: every path spends down through retirement ---
+    alive = np.ones(n, dtype=bool)  # paths that haven't run out yet
+    for y in range(years_dec):
+        inflate = (1 + infl) ** (years_acc + y)
 
-def _percentile(sorted_values, pct: float) -> float:
-    if not sorted_values:
-        return 0.0
-    idx = int(round((pct / 100.0) * (len(sorted_values) - 1)))
-    return sorted_values[idx]
+        base_need = profile.annual_income * profile.income_replacement_ratio
+        if profile.retirement_age + y < 65:
+            base_need += profile.pre_medicare_annual_cost   # bridge to Medicare
+        if profile.ltc_annual_cost > 0 and y >= years_dec - profile.ltc_years:
+            base_need += profile.ltc_annual_cost            # late-life care
+        need = max(base_need * inflate - guaranteed_today * inflate, 0.0)
+
+        if withdrawal_strategy == "dynamic":
+            # Guardrails: in down markets, draw less (but never below essentials).
+            ceiling = portfolio * GUARDRAIL_CEILING
+            withdrawal = np.where(
+                need <= ceiling, need, np.maximum(ceiling, need * SPENDING_FLOOR_RATIO)
+            )
+        else:
+            withdrawal = need
+
+        portfolio = np.where(alive, portfolio - withdrawal, 0.0)
+        alive &= portfolio > 0
+        mean, vol = _year_params(profile, -y, glide_path)
+        portfolio = np.where(alive, portfolio * (1 + rng.normal(mean, vol, n)), 0.0)
+
+    balances = np.sort(retirement_balance)
+
+    def pct(p):
+        return float(balances[int(round((p / 100.0) * (n - 1)))])
+
+    return MonteCarloResults(
+        probability_of_success=float(np.mean(alive)),
+        n_simulations=n,
+        p10=pct(10),
+        p50=pct(50),
+        p90=pct(90),
+        volatility=VOLATILITY_BY_RISK.get(profile.risk_tolerance, DEFAULT_VOLATILITY),
+    )
 
 
 # --------------------------------------------------------------------------- #
