@@ -18,6 +18,7 @@ from flask import Flask, Response, jsonify, request
 from markupsafe import escape
 
 from .agent import MODEL, draft_plan
+from .docqa import answer_question
 from .engine import (
     claiming_comparison,
     monte_carlo,
@@ -159,6 +160,7 @@ def _page(body: str) -> str:
   <div class="tab" data-tab="meeting" onclick="showTab('meeting')">Meeting prep</div>
   <div class="tab" data-tab="portfolio" onclick="showTab('portfolio')">Portfolio</div>
   <div class="tab" data-tab="chat" onclick="showTab('chat')">Pressure-test</div>
+  <div class="tab" data-tab="docs" onclick="showTab('docs')">Documents</div>
 </div>
 {body}
 </div></body></html>"""
@@ -283,6 +285,22 @@ CHAT_PANEL = """
 </div>
 """
 
+DOCS_PANEL = """
+<div class="card">
+  <div class="section-title">Ask questions about a client document</div>
+  <p class="help" style="margin-top:-6px">Paste a statement's text or upload a PDF, then ask. Claude answers
+  using only the document and tells you if something isn't in it.</p>
+  <div class="field"><label>Paste document text (optional)</label>
+    <textarea id="doc_text" rows="6" placeholder="Paste the relevant text from a statement, plan, or notes…"></textarea></div>
+  <div class="field"><label>…or upload a PDF (optional, up to ~30 MB)</label>
+    <input type="file" id="doc_pdf" accept="application/pdf"></div>
+  <div class="field"><label>Your question</label>
+    <input id="doc_q" placeholder="e.g. What is the total account value? When does the term life policy expire?"></div>
+  <button type="button" class="wide" id="docbtn" onclick="askDoc()">Ask (AI)</button>
+  <div id="doc_out" class="doc"></div>
+</div>
+"""
+
 PAGE_BODY = (
     '<form id="f" onsubmit="return false;">'
     '<div class="panel active" id="panel-plan">' + CLIENT_FORM + PLAN_RESULTS + '</div>'
@@ -290,6 +308,7 @@ PAGE_BODY = (
     '</form>'
     '<div class="panel" id="panel-portfolio">' + PORTFOLIO_PANEL + '</div>'
     '<div class="panel" id="panel-chat">' + CHAT_PANEL + '</div>'
+    '<div class="panel" id="panel-docs">' + DOCS_PANEL + '</div>'
     '<p class="foot">Illustrative only — a draft for advisor review, not investment advice.</p>'
     + """
 <script>
@@ -396,6 +415,29 @@ async function sendChat(){
     if(d.text) chatHistory.push({role:'assistant',content:d.text});
   } catch(e){ thinking.innerHTML='Something went wrong.'; }
   b.disabled=false;
+}
+
+// ---- Documents (Q&A) ----
+function readFileB64(file){
+  return new Promise(function(resolve){
+    if(!file){ resolve(null); return; }
+    var fr=new FileReader();
+    fr.onload=function(){ resolve(fr.result.split(',')[1]); };  // strip data: prefix
+    fr.readAsDataURL(file);
+  });
+}
+async function askDoc(){
+  var b=document.getElementById('docbtn'); b.disabled=true; b.textContent='Reading… (~30s)';
+  var out=document.getElementById('doc_out'); out.innerHTML='';
+  try {
+    var pdf=await readFileB64(document.getElementById('doc_pdf').files[0]);
+    var body=JSON.stringify({ question: document.getElementById('doc_q').value,
+                              text: document.getElementById('doc_text').value, pdf_b64: pdf });
+    var r=await fetch('/api/docqa',{method:'POST',headers:{'Content-Type':'application/json'},body:body});
+    var d=await r.json();
+    out.innerHTML = d.error ? '<p class="help">'+d.error+'</p>' : d.html;
+  } catch(e){ out.innerHTML='<p class="help">Something went wrong.</p>'; }
+  b.disabled=false; b.textContent='Ask (AI)';
 }
 
 window.addEventListener('DOMContentLoaded', function(){
@@ -651,6 +693,24 @@ def api_chat():
         return jsonify(html=markdown.markdown(text, extensions=["tables"]), text=text)
 
     return jsonify(html="<p>I couldn't settle after several steps — try rephrasing.</p>", text="")
+
+
+@app.route("/api/docqa", methods=["POST"])
+def api_docqa():
+    data = request.get_json(silent=True) or {}
+    try:
+        text = answer_question(
+            data.get("question", ""),
+            doc_text=(data.get("text") or "").strip() or None,
+            pdf_b64=data.get("pdf_b64") or None,
+        )
+        return jsonify(html=markdown.markdown(text, extensions=["tables"]))
+    except (ValueError, RuntimeError) as exc:
+        return jsonify(error=str(escape(str(exc))))
+
+
+# Allow larger request bodies for PDF uploads (~32 MB).
+app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
 
 
 def main():
