@@ -356,18 +356,40 @@ async function compute(){
 }
 var timer; function schedule(){ clearTimeout(timer); timer=setTimeout(compute,300); }
 
-function downloadFile(filename, content){
-  var blob = new Blob([content], {type:'text/markdown'});
+var DOC_STYLE = 'body{font-family:Georgia,serif;color:#111;max-width:720px;margin:24px auto;line-height:1.5}'
+  +'h1{font-size:20pt}h2{font-size:14pt;margin-top:16pt}'
+  +'table{border-collapse:collapse;width:100%;margin:8pt 0}'
+  +'th,td{border:1px solid #999;padding:5pt 8pt;font-size:10pt;text-align:left}'
+  +'blockquote{border-left:3px solid #888;margin:8pt 0;padding:2pt 10pt;color:#444}';
+function baseName(filename){ return (filename||'report').replace(/\\.md$/,''); }
+function downloadBlob(filename, content, type){
+  var blob = new Blob(content, {type:type});
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a);
   a.click(); a.remove(); URL.revokeObjectURL(url);
 }
-function addDownload(out, filename, md){
-  var btn = document.createElement('button');
-  btn.type = 'button'; btn.className = 'ghost small'; btn.style.marginTop = '14px';
-  btn.textContent = '⬇ Download report (.md)';
-  btn.onclick = function(){ downloadFile(filename || 'report.md', md); };
-  out.appendChild(btn);
+function downloadFile(filename, md){ downloadBlob(filename, [md], 'text/markdown'); }
+function downloadWord(filename, reportHtml){
+  var html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" '
+    +'xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><style>'+DOC_STYLE+'</style></head><body>'
+    +reportHtml+'</body></html>';
+  downloadBlob(baseName(filename)+'.doc', ['\\ufeff', html], 'application/msword');
+}
+function printPdf(filename, reportHtml){
+  var w = window.open('', '_blank');
+  if(!w){ alert('Please allow pop-ups for this site to save as PDF.'); return; }
+  w.document.write('<html><head><title>'+baseName(filename)+'</title><style>'+DOC_STYLE
+    +'@media print{body{margin:0}}</style></head><body>'+reportHtml+'</body></html>');
+  w.document.close(); w.focus(); setTimeout(function(){ w.print(); }, 400);
+}
+function addDownload(out, filename, md, reportHtml){
+  var bar=document.createElement('div');
+  bar.style.marginTop='14px'; bar.style.display='flex'; bar.style.gap='8px'; bar.style.flexWrap='wrap';
+  function mk(label, fn){ var b=document.createElement('button'); b.type='button'; b.className='ghost small'; b.textContent=label; b.onclick=fn; return b; }
+  bar.appendChild(mk('⬇ Word (.doc)', function(){ downloadWord(filename, reportHtml); }));
+  bar.appendChild(mk('🖨 Save as PDF', function(){ printPdf(filename, reportHtml); }));
+  bar.appendChild(mk('⬇ Markdown (.md)', function(){ downloadFile(filename || 'report.md', md); }));
+  out.appendChild(bar);
 }
 async function aiButton(btnId, outId, url, getBody, label){
   var b=document.getElementById(btnId); b.disabled=true; b.textContent='Working… (~1 min)';
@@ -375,7 +397,7 @@ async function aiButton(btnId, outId, url, getBody, label){
   try {
     var r=await fetch(url, getBody()); var d=await r.json();
     if (d.error){ out.innerHTML='<p class="help">'+d.error+'</p>'; }
-    else { out.innerHTML = d.html; if (d.md) addDownload(out, d.filename, d.md); }
+    else { out.innerHTML = d.html; if (d.md) addDownload(out, d.filename, d.md, d.report_html); }
   } catch(e){ out.innerHTML='<p class="help">Something went wrong.</p>'; }
   b.disabled=false; b.textContent=label;
 }
@@ -550,7 +572,8 @@ def api_plan():
         text = draft_plan(profile, *pieces)
         md = build_markdown(profile, *pieces, plan_text=text)
         return jsonify(html=markdown.markdown(text, extensions=["tables"]),
-                       md=md, filename=_dl_name(profile.name, "plan"))
+                       md=md, report_html=markdown.markdown(md, extensions=["tables"]),
+                       filename=_dl_name(profile.name, "plan"))
     except RuntimeError as exc:
         return jsonify(error=str(escape(str(exc))))
 
@@ -571,7 +594,8 @@ def api_meeting():
         md = build_markdown(profile, *pieces, plan_text=text,
                             heading="Pre-Meeting Briefing", draft_section="Briefing")
         return jsonify(html=markdown.markdown(text, extensions=["tables"]),
-                       md=md, filename=_dl_name(profile.name, "meeting"))
+                       md=md, report_html=markdown.markdown(md, extensions=["tables"]),
+                       filename=_dl_name(profile.name, "meeting"))
     except RuntimeError as exc:
         return jsonify(error=str(escape(str(exc))))
 
@@ -618,7 +642,8 @@ def api_portfolio_analyze():
         text = portfolio_commentary(holdings, analysis, risk)
         md = build_portfolio_markdown(holdings, analysis, risk, text)
         return jsonify(html=markdown.markdown(text, extensions=["tables"]),
-                       md=md, filename=f"portfolio-{risk}-{datetime.date.today().isoformat()}.md")
+                       md=md, report_html=markdown.markdown(md, extensions=["tables"]),
+                       filename=f"portfolio-{risk}-{datetime.date.today().isoformat()}.md")
     except RuntimeError as exc:
         return jsonify(error=str(escape(str(exc))))
 
