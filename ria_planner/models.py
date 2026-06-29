@@ -20,6 +20,7 @@ class ClientProfile:
     annual_income: float = 0.0         # gross household income
     current_savings: float = 0.0       # all invested retirement assets, both spouses
     monthly_contribution: float = 0.0  # combined household retirement saving / month
+    contribution_growth: float = 0.02  # how fast contributions rise each year (raises)
 
     # --- Guaranteed retirement income (today's dollars, household) ---
     # Income that does NOT come from the portfolio, so it lowers how big the
@@ -40,8 +41,10 @@ class ClientProfile:
     expected_return: float = 0.06      # nominal annual portfolio return, before fees
     annual_fee: float = 0.01           # advisory + fund fees (1%); reduces net return
     inflation: float = 0.025           # annual inflation (2.5%)
-    income_replacement_ratio: float = 0.75  # % of gross income needed (pre-tax)
+    income_replacement_ratio: float = 0.75  # % of income needed in retirement (spending)
     withdrawal_rate: float = 0.04      # sustainable withdrawal rate (the "4% rule")
+    retirement_spending_decline: float = 0.01  # real spending drifts down per year (the "smile")
+    retirement_tax_rate: float = 0.0   # taxes on portfolio withdrawals (0 = pre-tax target)
 
     # --- Context for the advisor narrative ---
     risk_tolerance: str = "moderate"   # conservative | moderate | aggressive

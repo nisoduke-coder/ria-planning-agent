@@ -13,6 +13,7 @@ risk (a bad market right before/after retirement) that a single number hides.
 Everything is illustrative, not advice. See the disclaimer in cli.py.
 """
 
+import math
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -46,6 +47,25 @@ GLIDE_YEARS = 10
 GUARDRAIL_CEILING = 0.05
 SPENDING_FLOOR_RATIO = 0.75
 
+# Retirement spending "smile": real lifestyle spending drifts down through the
+# active years, but we don't let it fall below this share of the starting level
+# (people slow down, they don't stop spending). Healthcare/LTC is added on top.
+SPENDING_DECLINE_FLOOR = 0.70
+
+
+def _draw_growth(mean, vol, n, rng):
+    """Return n random one-year growth multipliers from a LOGNORMAL distribution.
+
+    Lognormal (vs. a plain normal) is the standard, more realistic choice for
+    investment returns: a multiplier can never go below zero (a normal draw can
+    imply a >100% loss), and it captures the compounding asymmetry of markets.
+    Calibrated so the arithmetic mean is (1 + mean) and the std-dev is `vol`.
+    """
+    one_plus = 1 + mean
+    sigma = math.sqrt(math.log(1 + (vol / one_plus) ** 2))
+    mu = math.log(one_plus) - 0.5 * sigma ** 2
+    return rng.lognormal(mu, sigma, n)
+
 # Social Security: claiming later than full retirement age (67) raises the
 # benefit; claiming earlier cuts it. Standard SSA adjustment factors.
 SS_CLAIM_FACTORS = {62: 0.70, 67: 1.00, 70: 1.24}
@@ -77,38 +97,37 @@ class PlanResults:
     sustainable_total_income: float
 
 
-def _future_value(profile: ClientProfile) -> float:
-    """Grow today's savings + monthly contributions to the retirement date."""
-    years = profile.years_to_retirement
-    months = years * 12
-    annual_r = profile.net_return
-    monthly_r = (1 + annual_r) ** (1 / 12) - 1
+def _growing_annuity_factor(years, r, g):
+    """Future value of $1/yr that grows at rate g, invested at return r."""
+    if years == 0:
+        return 0.0
+    if abs(r - g) < 1e-9:
+        return years * (1 + r) ** (years - 1)
+    return ((1 + r) ** years - (1 + g) ** years) / (r - g)
 
-    fv_current = profile.current_savings * (1 + annual_r) ** years
-    if monthly_r == 0:
-        fv_contributions = profile.monthly_contribution * months
-    else:
-        fv_contributions = profile.monthly_contribution * (
-            ((1 + monthly_r) ** months - 1) / monthly_r
-        )
-    return fv_current + fv_contributions
+
+def _future_value(profile: ClientProfile) -> float:
+    """Grow today's savings + (rising) contributions to the retirement date."""
+    years = profile.years_to_retirement
+    r = profile.net_return
+    fv_current = profile.current_savings * (1 + r) ** years
+    annual_contribution = profile.monthly_contribution * 12
+    fv_contrib = annual_contribution * _growing_annuity_factor(
+        years, r, profile.contribution_growth
+    )
+    return fv_current + fv_contrib
 
 
 def _required_monthly_contribution(profile: ClientProfile, target: float) -> float:
-    """Solve for the monthly contribution that reaches `target` by retirement."""
+    """Solve for the (starting) monthly contribution that reaches `target`."""
     years = profile.years_to_retirement
-    months = years * 12
-    annual_r = profile.net_return
-    monthly_r = (1 + annual_r) ** (1 / 12) - 1
-
-    fv_current = profile.current_savings * (1 + annual_r) ** years
+    r = profile.net_return
+    fv_current = profile.current_savings * (1 + r) ** years
     needed = max(target - fv_current, 0.0)
-    if months == 0:
+    factor = _growing_annuity_factor(years, r, profile.contribution_growth)
+    if factor == 0:
         return 0.0
-    if monthly_r == 0:
-        return needed / months
-    annuity_factor = ((1 + monthly_r) ** months - 1) / monthly_r
-    return needed / annuity_factor
+    return (needed / factor) / 12
 
 
 def run_plan(profile: ClientProfile) -> PlanResults:
@@ -125,8 +144,13 @@ def run_plan(profile: ClientProfile) -> PlanResults:
     guaranteed_income = guaranteed_today * inflate
     portfolio_income_need = max(gross_income_need - guaranteed_income, 0.0)
 
+    # Withdrawals from tax-deferred accounts are taxed, so the portfolio must
+    # provide more than the spending need to net it (0 tax = pre-tax target).
+    tax = profile.retirement_tax_rate
+    portfolio_pretax = portfolio_income_need / (1 - tax) if tax < 1 else portfolio_income_need
+
     target_nest_egg = (
-        portfolio_income_need / profile.withdrawal_rate
+        portfolio_pretax / profile.withdrawal_rate
         if profile.withdrawal_rate > 0
         else float("inf")
     )
@@ -228,7 +252,8 @@ def monte_carlo(
     portfolio = np.full(n, float(profile.current_savings))
     for y in range(years_acc):
         mean, vol = _year_params(profile, years_acc - y, glide_path)
-        portfolio = portfolio * (1 + rng.normal(mean, vol, n)) + annual_contribution
+        portfolio = portfolio * _draw_growth(mean, vol, n, rng) + annual_contribution
+        annual_contribution *= (1 + profile.contribution_growth)  # raises over time
     retirement_balance = portfolio.copy()
 
     ss_today = profile.social_security_annual * ss_multiplier
@@ -238,11 +263,15 @@ def monte_carlo(
 
     # --- Decumulation: every path spends down through retirement ---
     alive = np.ones(n, dtype=bool)  # paths that haven't run out yet
+    tax = profile.retirement_tax_rate
     for y in range(years_dec):
         inflate = (1 + infl) ** (years_acc + y)
         age = profile.retirement_age + y
 
-        base_need = profile.annual_income * profile.income_replacement_ratio
+        # Lifestyle spending follows the "smile" — it drifts down through the
+        # active years (floored), while healthcare/LTC is added on top.
+        decline = max((1 - profile.retirement_spending_decline) ** y, SPENDING_DECLINE_FLOOR)
+        base_need = profile.annual_income * profile.income_replacement_ratio * decline
         if age < 65:
             base_need += profile.pre_medicare_annual_cost   # bridge to Medicare
         if profile.ltc_annual_cost > 0 and y >= years_dec - profile.ltc_years:
@@ -253,6 +282,9 @@ def monte_carlo(
         ss_now = ss_today if (ss_claim_age is None or age >= ss_claim_age) else 0.0
         guaranteed_today = ss_now + other_guaranteed_today
         need = max(base_need * inflate - guaranteed_today * inflate, 0.0)
+        # Gross up for taxes on tax-deferred withdrawals (0 tax = no change).
+        if tax > 0:
+            need = need / (1 - tax)
 
         if withdrawal_strategy == "dynamic":
             # Guardrails: in down markets, draw less (but never below essentials).
@@ -266,7 +298,7 @@ def monte_carlo(
         portfolio = np.where(alive, portfolio - withdrawal, 0.0)
         alive &= portfolio > 0
         mean, vol = _year_params(profile, -y, glide_path)
-        portfolio = np.where(alive, portfolio * (1 + rng.normal(mean, vol, n)), 0.0)
+        portfolio = np.where(alive, portfolio * _draw_growth(mean, vol, n, rng), 0.0)
 
     balances = np.sort(retirement_balance)
 
@@ -298,6 +330,12 @@ class Scenario:
 class ClaimingOption:
     claim_age: int
     annual_benefit: float           # combined household SS at this claim age (today's $)
+    probability_of_success: float
+
+
+@dataclass
+class LongevityPoint:
+    age: int
     probability_of_success: float
 
 
@@ -360,3 +398,14 @@ def claiming_comparison(profile: ClientProfile) -> list:
             )
         )
     return options
+
+
+def longevity_stress(profile: ClientProfile) -> list:
+    """Longevity isn't a single number: show success if you live to the planning
+    age, +5, and +8 years. A hard cutoff hides how a long life strains the plan.
+    """
+    base = profile.life_expectancy
+    return [
+        LongevityPoint(age, monte_carlo(replace(profile, life_expectancy=age)).probability_of_success)
+        for age in (base, base + 5, base + 8)
+    ]
